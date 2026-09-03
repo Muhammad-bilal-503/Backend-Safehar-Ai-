@@ -1,0 +1,62 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Test, coverage, and type-checker output
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.pytype/
+.ruff_cache/
+
+# Local databases and runtime files
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# Uploaded/generated media (keep the directory itself)
+app/media/*
+!app/media/.gitkeep
+
+# IDE and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local tooling
+.ngrok/
