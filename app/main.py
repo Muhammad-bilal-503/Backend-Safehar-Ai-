@@ -6,10 +6,10 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.core.database import Base, engine
-from app.api import auth, users, contacts, journeys, emergencies, services, ws, assistant, reports
+from app.api import auth, users, contacts, journeys, emergencies, services, ws, assistant, reports, incidents, tracking
 
 # Import all models so SQLAlchemy's metadata knows about them before create_all.
-from app.models import user, otp, trusted_contact, journey, emergency_event  # noqa: F401
+from app.models import user, otp, trusted_contact, journey, emergency_event, incident  # noqa: F401
 
 os.makedirs(settings.MEDIA_ROOT, exist_ok=True)
 Base.metadata.create_all(bind=engine)
@@ -38,6 +38,8 @@ app.include_router(emergencies.router)
 app.include_router(reports.router)
 app.include_router(services.router)
 app.include_router(assistant.router)
+app.include_router(incidents.router)
+app.include_router(tracking.router)
 app.include_router(ws.router)
 
 

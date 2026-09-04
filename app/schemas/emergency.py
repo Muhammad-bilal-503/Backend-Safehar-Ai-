@@ -38,6 +38,8 @@ class EmergencyOut(BaseModel):
     evidence_photos: list
     evidence_videos: list
     evidence_clips: list
+    drive_folder_link: str | None
+    drive_link_sent: bool
 
     class Config:
         from_attributes = True

@@ -24,6 +24,9 @@ class Settings(BaseSettings):
 
     ANTHROPIC_API_KEY: str = ""
 
+    GOOGLE_DRIVE_CLIENT_JSON: str = ""
+    GOOGLE_DRIVE_TOKEN_JSON: str = ""
+
     MEDIA_ROOT: str = "app/media"
     PUBLIC_BASE_URL: str = "http://localhost:8000"
 

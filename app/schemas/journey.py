@@ -10,7 +10,7 @@ class JourneyCreate(BaseModel):
     to_lat: float | None = None
     to_lng: float | None = None
     expected_arrival: datetime | None = None
-    trusted_contact_id: str | None = None
+    trusted_contact_ids: list[str] = []
     notify_on_deviation: bool = True
 
 
@@ -29,8 +29,8 @@ class JourneyOut(BaseModel):
     to_lng: float | None
     status: str
     expected_arrival: datetime | None
-    trusted_contact_id: str | None
-    trusted_contact_name: str | None
+    trusted_contact_ids: list[str]
+    trusted_contact_names: list[str]
     notify_on_deviation: bool
     current_lat: float | None
     current_lng: float | None

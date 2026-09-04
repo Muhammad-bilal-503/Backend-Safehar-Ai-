@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 import enum
 
-from sqlalchemy import String, Float, Integer, Boolean, DateTime, ForeignKey, Enum as SAEnum
+from sqlalchemy import String, Float, Integer, Boolean, DateTime, ForeignKey, JSON, Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -31,8 +31,12 @@ class Journey(Base):
     status: Mapped[JourneyStatus] = mapped_column(SAEnum(JourneyStatus), default=JourneyStatus.planned)
     expected_arrival: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
-    trusted_contact_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("trusted_contacts.id"), nullable=True)
-    trusted_contact_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # Destination live-location sharing: the user can pick one or more trusted
+    # contacts to share this journey with (see requirement "Destination Live
+    # Location Sharing" — only these contacts receive updates for this journey,
+    # separate from the emergency override which always notifies everyone).
+    trusted_contact_ids: Mapped[list] = mapped_column(JSON, default=list)
+    trusted_contact_names: Mapped[list] = mapped_column(JSON, default=list)
     notify_on_deviation: Mapped[bool] = mapped_column(Boolean, default=True)
 
     current_lat: Mapped[float | None] = mapped_column(Float, nullable=True)

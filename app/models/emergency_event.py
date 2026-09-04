@@ -47,6 +47,13 @@ class EmergencyEvent(Base):
     evidence_recording: Mapped[bool] = mapped_column(Boolean, default=True)
     evidence_upload_progress: Mapped[int] = mapped_column(Integer, default=0)
 
+    # Google Drive evidence folder — created immediately on SOS activation.
+    # drive_link_sent tracks whether trusted contacts have already received
+    # the folder link (it must only be sent once, per the spec).
+    drive_folder_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    drive_folder_link: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    drive_link_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+
     # stored as relative file paths under MEDIA_ROOT, e.g. "photos/<id>/front_....jpg"
     evidence_photos: Mapped[list] = mapped_column(JSON, default=list)
     evidence_videos: Mapped[list] = mapped_column(JSON, default=list)

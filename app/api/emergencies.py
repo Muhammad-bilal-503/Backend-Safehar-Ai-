@@ -9,11 +9,14 @@ from app.models.emergency_event import EmergencyEvent, EmergencyStatus, Emergenc
 from app.models.trusted_contact import TrustedContact
 from app.schemas.emergency import EmergencyCreate, EmergencyLocationUpdate, EmergencyStatusUpdate, EmergencyOut
 from app.api.deps import get_current_user
-from app.services.email_service import notify_emergency_location
+from app.services.email_service import notify_emergency_location, notify_drive_evidence_link
 from app.services.storage import save_evidence_file, public_url
 from app.services.ws_manager import manager
+from app.services import drive_service
 
 router = APIRouter(prefix="/api/emergencies", tags=["emergencies"])
+
+_MIME = {"photo": "image/jpeg", "video": "video/mp4", "audio": "audio/mp4"}
 
 
 async def _broadcast(event: EmergencyEvent, kind: str) -> None:
@@ -21,6 +24,14 @@ async def _broadcast(event: EmergencyEvent, kind: str) -> None:
         "kind": kind,
         "emergency": EmergencyOut.model_validate(event).model_dump(mode="json"),
     })
+
+
+def _emergency_contacts(db: Session, owner_id: str) -> list[TrustedContact]:
+    return (
+        db.query(TrustedContact)
+        .filter(TrustedContact.owner_id == owner_id, TrustedContact.is_emergency_contact == True)  # noqa: E712
+        .all()
+    )
 
 
 @router.get("", response_model=list[EmergencyOut])
@@ -60,13 +71,20 @@ async def activate_emergency(payload: EmergencyCreate, current_user: User = Depe
     db.commit()
     db.refresh(event)
 
-    contacts = (
-        db.query(TrustedContact)
-        .filter(TrustedContact.owner_id == current_user.id, TrustedContact.is_emergency_contact == True)  # noqa: E712
-        .all()
-    )
+    # Create the SOS evidence folder immediately, as required — before any
+    # evidence has even been captured yet. Failures here are non-fatal; the
+    # evidence endpoint will retry creating it lazily if this didn't work.
+    folder = drive_service.create_incident_folder(event.id, current_user.full_name)
+    if folder:
+        event.drive_folder_id, event.drive_folder_link = folder
+        db.commit()
+        db.refresh(event)
+
+    # Emergency override: ALWAYS notify every emergency contact, regardless
+    # of any destination-sharing selection on an active journey.
+    contacts = _emergency_contacts(db, current_user.id)
     if payload.latitude is not None and payload.longitude is not None:
-        result = await notify_emergency_location(current_user.full_name, contacts, payload.latitude, payload.longitude)
+        result = await notify_emergency_location(current_user.full_name, contacts, payload.latitude, payload.longitude, event.id)
         event.contacts_notified = result["delivered"]
         db.commit()
         db.refresh(event)
@@ -97,10 +115,13 @@ async def update_emergency_location(emergency_id: str, payload: EmergencyLocatio
 
 @router.post("/{emergency_id}/evidence/{kind}", response_model=EmergencyOut)
 async def upload_evidence(emergency_id: str, kind: str, file: UploadFile = File(...), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """kind: photo | video | audio. Streams the raw upload straight to disk — no Base64."""
+    """kind: photo | video | audio. Streams the raw upload straight to disk —
+    no Base64 — then forwards it into the incident's Drive folder. The Flutter
+    app batches these calls into a once-a-minute cycle (see EvidenceCaptureService)."""
     if kind not in ("photo", "video", "audio"):
         raise HTTPException(400, "kind must be photo, video, or audio.")
     event = _get_owned(db, emergency_id, current_user.id)
+
     relative_path = await save_evidence_file(kind, event.id, file)
     url = public_url(relative_path)
 
@@ -113,8 +134,41 @@ async def upload_evidence(emergency_id: str, kind: str, file: UploadFile = File(
 
     total = len(event.evidence_photos) + len(event.evidence_videos) + len(event.evidence_clips)
     event.evidence_upload_progress = min(100, total * 10)
+
+    # Lazily create the Drive folder if activation-time creation failed earlier.
+    if not event.drive_folder_id:
+        folder = drive_service.create_incident_folder(event.id, current_user.full_name)
+        if folder:
+            event.drive_folder_id, event.drive_folder_link = folder
+
+    import os
+    from app.core.config import settings
+    local_path = os.path.join(settings.MEDIA_ROOT, relative_path)
+    drive_uploaded = False
+    if event.drive_folder_id:
+        drive_link = drive_service.upload_file_to_folder(
+            event.drive_folder_id, local_path, os.path.basename(relative_path), _MIME.get(kind, "application/octet-stream")
+        )
+        drive_uploaded = drive_link is not None
+
     db.commit()
     db.refresh(event)
+
+    # First successful Drive upload -> notify trusted contacts with the
+    # folder link, exactly once for this incident.
+    if drive_uploaded and not event.drive_link_sent and event.drive_folder_link:
+        contacts = _emergency_contacts(db, current_user.id)
+        any_sent = False
+        for contact in contacts:
+            if contact.email and contact.status != "pending":
+                drive_service.share_folder_with_email(event.drive_folder_id, contact.email)
+                sent = await notify_drive_evidence_link(contact, current_user.full_name, event.drive_folder_link)
+                any_sent = any_sent or sent
+        if any_sent:
+            event.drive_link_sent = True
+            db.commit()
+            db.refresh(event)
+
     await _broadcast(event, "updated")
     return event
 
