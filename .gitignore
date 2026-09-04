@@ -60,3 +60,7 @@ Thumbs.db
 
 # Local tooling
 .ngrok/
+
+# Google Drive OAuth credentials
+scripts/client_secret.json
+scripts/token.json
