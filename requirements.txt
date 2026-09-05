@@ -1,6 +1,7 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
-SQLAlchemy==2.0.35
+motor==3.6.0
+beanie==1.27.0
 pydantic==2.9.2
 pydantic-settings==2.5.2
 python-jose[cryptography]==3.3.0
@@ -12,7 +13,6 @@ email-validator==2.2.0
 reportlab==4.2.2
 websockets==13.1
 python-dotenv==1.0.1
-alembic==1.13.2
 gunicorn==22.0.0
 bcrypt==4.0.1
 google-api-python-client==2.149.0

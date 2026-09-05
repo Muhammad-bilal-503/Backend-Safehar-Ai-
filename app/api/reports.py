@@ -10,10 +10,8 @@ from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage,
 )
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.database import get_db
 from app.models.user import User
 from app.models.emergency_event import EmergencyEvent
 from app.api.deps import get_current_user
@@ -36,8 +34,8 @@ def _footer(canvas, doc):
 
 
 @router.get("/{emergency_id}/report")
-def generate_report(emergency_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    event = db.get(EmergencyEvent, emergency_id)
+async def generate_report(emergency_id: str, current_user: User = Depends(get_current_user)):
+    event = await EmergencyEvent.get(emergency_id)
     if not event or (current_user.role != "admin" and event.owner_id != current_user.id):
         raise HTTPException(404, "Emergency not found.")
 

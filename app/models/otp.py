@@ -1,21 +1,29 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import String, DateTime, Boolean
-from sqlalchemy.orm import Mapped, mapped_column
+from beanie import Document
+from pydantic import Field
+from pymongo import IndexModel
 
-from app.core.database import Base
+
+def _uuid() -> str:
+    return str(uuid.uuid4())
 
 
-class OTPCode(Base):
+class OTPCode(Document):
     """Short-lived codes used for email verification and password reset."""
 
-    __tablename__ = "otp_codes"
+    id: str = Field(default_factory=_uuid)
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    email: Mapped[str] = mapped_column(String(255), index=True)
-    code: Mapped[str] = mapped_column(String(8))
-    purpose: Mapped[str] = mapped_column(String(32))  # "verify_email" | "reset_password"
-    used: Mapped[bool] = mapped_column(Boolean, default=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    email: str
+    code: str
+    purpose: str  # "verify_email" | "reset_password"
+    used: bool = False
+    expires_at: datetime
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    class Settings:
+        name = "otp_codes"
+        indexes = [
+            IndexModel("email"),
+        ]

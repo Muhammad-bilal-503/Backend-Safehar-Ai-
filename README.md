@@ -1,14 +1,20 @@
-# SafeHer AI — Backend (FastAPI)
+# SafeHer AI — Backend (FastAPI + MongoDB)
 
 Python backend for the SafeHer AI personal-safety platform.
 
-**Live URL:** `https://safehar-ai-f2eddne4c6gtd4ga.southindia-01.azurewebsites.net`
-**Interactive docs (Swagger):** add `/docs` to the URL above — every route below is also
-browsable/testable there.
+**Interactive docs (Swagger):** once running, visit `/docs` on your host —
+every route below is also browsable/testable there.
+
+> **Migration note:** this backend now runs on **MongoDB** (via the async
+> **Beanie** ODM, built on **Motor**), replacing the original SQLAlchemy +
+> SQLite setup. All API routes, request/response shapes, and business logic
+> are unchanged — only the data layer moved. See
+> [Migrating from the SQLite version](#migrating-from-the-sqlite-version)
+> below if you're upgrading an existing deployment.
 
 ## Stack
 - FastAPI + Uvicorn/Gunicorn
-- SQLAlchemy 2.0 ORM (SQLite by default)
+- **MongoDB** with **Beanie** (async ODM) + **Motor** (async driver)
 - JWT auth (access + refresh tokens)
 - WebSocket broadcast for the live Monitor dashboard
 - Evidence files uploaded as real binary via `multipart/form-data` — no Base64
@@ -156,33 +162,88 @@ to other users, so only someone with the emailed link can view it.
 
 | Protocol | Full Path | Auth | Notes |
 |---|---|---|---|
-| WebSocket | `wss://<host>/ws/monitor` | Bearer not required on the socket itself (the Monitor dashboard UI is where access should be gated) | Pushes a JSON message `{"kind": "created"|"updated", "emergency": EmergencyOut}` every time any `EmergencyEvent` changes. Requires **"Web sockets" = On** in Azure App Service → Configuration → General settings. |
+| WebSocket | `wss://<host>/ws/monitor` | Bearer not required on the socket itself (the Monitor dashboard UI is where access should be gated) | Pushes a JSON message `{"kind": "created"|"updated", "emergency": EmergencyOut}` every time any `EmergencyEvent` changes. |
 
 ---
 
 ## Setup
+
+### 1. Get a MongoDB instance
+Pick one of these — you only need one:
+
+**Option A — MongoDB Atlas (cloud, free, no install, recommended if you don't
+already run MongoDB):**
+1. Create a free cluster at https://www.mongodb.com/cloud/atlas/register.
+2. Under **Database Access**, create a database user + password.
+3. Under **Network Access**, add your IP (or `0.0.0.0/0` for quick testing).
+4. Click **Connect → Drivers**, copy the connection string — it looks like:
+   `mongodb+srv://<user>:<password>@<cluster>.mongodb.net/?retryWrites=true&w=majority`
+
+**Option B — Local MongoDB (Docker, fastest for local dev):**
+```bash
+docker run -d --name safeher-mongo -p 27017:27017 mongo:7
+```
+
+**Option C — Local MongoDB (native install):**
+Install `mongod` for your OS from https://www.mongodb.com/try/download/community
+and run it (it listens on `mongodb://localhost:27017` by default).
+
+### 2. Install dependencies and configure the app
 ```bash
 python -m venv venv
 venv\Scripts\activate           # Windows PowerShell: venv\Scripts\Activate.ps1
+                                 # macOS/Linux: source venv/bin/activate
 pip install -r requirements.txt
-copy .env.example .env          # fill in real values for production
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+copy .env.example .env          # macOS/Linux: cp .env.example .env
 ```
 
-## Environment variables (set as Azure "Application settings" in production)
+Edit `.env` and set `MONGODB_URL` / `MONGODB_DB_NAME` to match whichever option
+you chose above (the default `mongodb://localhost:27017` already matches
+Options B and C — no change needed for local dev).
+
+### 3. Run it
+```bash
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+On startup the app connects to MongoDB and registers all collections via
+Beanie — there's no separate migration step, and no schema to create up
+front: collections and indexes are created automatically the first time
+each document type is used.
+
+Visit `http://localhost:8000/docs` to try the API.
+
+## Environment variables
 | Variable | Purpose |
 |---|---|
 | `SECRET_KEY` | JWT signing key — must be a long random string in production |
-| `DATABASE_URL` | defaults to local SQLite; point at Postgres/MySQL for a real deployment |
+| `MONGODB_URL` | MongoDB connection string — local (`mongodb://localhost:27017`) or Atlas (`mongodb+srv://...`) |
+| `MONGODB_DB_NAME` | Name of the database to use inside that MongoDB instance (default `safeher`) |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` | email notifications (contact invites, OTP codes, journey/emergency alerts). Left blank → emails are logged instead of sent. |
 | `GOOGLE_DRIVE_CLIENT_JSON`, `GOOGLE_DRIVE_TOKEN_JSON` | Google Drive evidence upload — see `scripts/gdrive_auth.py` for one-time setup |
 | `ANTHROPIC_API_KEY` | optional — enables full AI responses from the Assistant; without it, the assistant gives a canned safety-guidance reply |
-| `PUBLIC_BASE_URL` | must be your real deployed URL (e.g. `https://safehar-ai-....azurewebsites.net`) — used to build the `/track/...` links sent by email |
+| `PUBLIC_BASE_URL` | must be your real deployed URL (e.g. `https://your-app.example.com`) — used to build the `/track/...` links sent by email |
 
 ## Notes
 - Uploaded evidence files are written to `app/media/{photos,audio,videos}` and served at
-  `/media/...`, in addition to being pushed to Google Drive when configured.
-- On Azure App Service (Linux), the deployment folder (`/home/site/wwwroot`) is on
-  persistent storage, so the default SQLite file and local media survive restarts —
-  but not reliably across multiple scaled-out instances. Move to Postgres before scaling
-  beyond a single instance.
+  `/media/...`, in addition to being pushed to Google Drive when configured. This is
+  unchanged by the MongoDB migration — only structured data (users, contacts, journeys,
+  emergencies, incidents, OTP codes) lives in MongoDB; media files stay on disk.
+- Document ids (`id` field on every collection) are UUID strings, exactly like the old
+  SQLite primary keys — not MongoDB's default `ObjectId`. This keeps every request/response
+  shape byte-for-byte identical to the previous version, so existing frontend/mobile clients
+  need no changes.
+- For production, prefer MongoDB Atlas or a managed MongoDB service over a single
+  self-hosted `mongod` — it gives you backups, replication, and no single point of failure.
+
+## Migrating from the SQLite version
+If you have an existing deployment using the old SQLAlchemy + `safeher.db` backend:
+1. This new version does **not** read `safeher.db` — it's a clean start on MongoDB, since
+   the data models moved from relational tables to documents.
+2. There is no auto-migration script included. If you need to carry over existing users,
+   contacts, journeys, or emergency history, export each SQLite table to JSON/CSV and
+   write a one-off script that reads it and calls `await Model(...).insert()` for each row,
+   using the model classes in `app/models/`. Since ids stayed UUID strings, you can reuse
+   the same id values when migrating so relationships between users/contacts/journeys are
+   preserved.
+3. All API contracts, environment variable names outside of the database connection
+   (`DATABASE_URL` → `MONGODB_URL` + `MONGODB_DB_NAME`), and business logic are unchanged.

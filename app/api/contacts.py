@@ -1,7 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
 
-from app.core.database import get_db
 from app.models.user import User
 from app.models.trusted_contact import TrustedContact, ContactStatus
 from app.schemas.contact import ContactCreate, ContactUpdate, ContactOut
@@ -12,45 +10,41 @@ router = APIRouter(prefix="/api/contacts", tags=["contacts"])
 
 
 @router.get("", response_model=list[ContactOut])
-def list_contacts(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return db.query(TrustedContact).filter(TrustedContact.owner_id == current_user.id).all()
+async def list_contacts(current_user: User = Depends(get_current_user)):
+    return await TrustedContact.find(TrustedContact.owner_id == current_user.id).to_list()
 
 
 @router.post("", response_model=ContactOut, status_code=201)
-def create_contact(payload: ContactCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def create_contact(payload: ContactCreate, current_user: User = Depends(get_current_user)):
     contact = TrustedContact(owner_id=current_user.id, **payload.model_dump())
     # Auto-link if this email already belongs to a registered SafeHer user.
     if contact.email:
-        existing = db.query(User).filter(User.email == contact.email).first()
+        existing = await User.find_one(User.email == contact.email)
         if existing:
             contact.linked_user_id = existing.id
             contact.status = ContactStatus.verified
-    db.add(contact)
-    db.commit()
-    db.refresh(contact)
+    await contact.insert()
     return contact
 
 
 @router.put("/{contact_id}", response_model=ContactOut)
-def update_contact(contact_id: str, payload: ContactUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    contact = _get_owned(db, contact_id, current_user.id)
+async def update_contact(contact_id: str, payload: ContactUpdate, current_user: User = Depends(get_current_user)):
+    contact = await _get_owned(contact_id, current_user.id)
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(contact, field, value)
-    db.commit()
-    db.refresh(contact)
+    await contact.save()
     return contact
 
 
 @router.delete("/{contact_id}", status_code=204)
-def delete_contact(contact_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    contact = _get_owned(db, contact_id, current_user.id)
-    db.delete(contact)
-    db.commit()
+async def delete_contact(contact_id: str, current_user: User = Depends(get_current_user)):
+    contact = await _get_owned(contact_id, current_user.id)
+    await contact.delete()
 
 
 @router.post("/{contact_id}/invite")
-async def invite_contact(contact_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    contact = _get_owned(db, contact_id, current_user.id)
+async def invite_contact(contact_id: str, current_user: User = Depends(get_current_user)):
+    contact = await _get_owned(contact_id, current_user.id)
     if not contact.email:
         raise HTTPException(400, "This contact has no email address to invite.")
     html = (
@@ -59,12 +53,12 @@ async def invite_contact(contact_id: str, current_user: User = Depends(get_curre
     )
     await send_email(contact.email, f"{current_user.full_name} invited you to SafeHer AI", html)
     contact.status = ContactStatus.pending
-    db.commit()
+    await contact.save()
     return {"message": "Invitation sent."}
 
 
-def _get_owned(db: Session, contact_id: str, owner_id: str) -> TrustedContact:
-    contact = db.get(TrustedContact, contact_id)
+async def _get_owned(contact_id: str, owner_id: str) -> TrustedContact:
+    contact = await TrustedContact.get(contact_id)
     if not contact or contact.owner_id != owner_id:
         raise HTTPException(404, "Contact not found.")
     return contact

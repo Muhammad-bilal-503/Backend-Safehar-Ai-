@@ -10,7 +10,12 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
     ENVIRONMENT: str = "development"
 
-    DATABASE_URL: str = "sqlite:///./safeher.db"
+    # --- MongoDB ---
+    # Full connection string, e.g.:
+    #   mongodb://localhost:27017                (local)
+    #   mongodb+srv://user:pass@cluster.mongodb.net  (Atlas)
+    MONGODB_URL: str = "mongodb://localhost:27017"
+    MONGODB_DB_NAME: str = "safeher"
 
     SMTP_HOST: str = ""
     SMTP_PORT: int = 587

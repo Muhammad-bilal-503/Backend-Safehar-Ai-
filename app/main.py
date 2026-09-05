@@ -1,23 +1,31 @@
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
-from app.core.database import Base, engine
+from app.core.database import init_db, close_db
 from app.api import auth, users, contacts, journeys, emergencies, services, ws, assistant, reports, incidents, tracking
 
-# Import all models so SQLAlchemy's metadata knows about them before create_all.
-from app.models import user, otp, trusted_contact, journey, emergency_event, incident  # noqa: F401
-
 os.makedirs(settings.MEDIA_ROOT, exist_ok=True)
-Base.metadata.create_all(bind=engine)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Connect to MongoDB and register all Document models with Beanie
+    # before the app starts accepting requests.
+    await init_db()
+    yield
+    await close_db()
+
 
 app = FastAPI(
     title="SafeHer AI API",
     description="Backend for the SafeHer AI personal safety platform.",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
