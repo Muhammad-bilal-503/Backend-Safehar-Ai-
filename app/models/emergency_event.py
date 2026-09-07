@@ -2,10 +2,13 @@ import uuid
 from datetime import datetime, timezone
 import enum
 
-from sqlalchemy import String, Float, Integer, Boolean, DateTime, ForeignKey, JSON, Enum as SAEnum
-from sqlalchemy.orm import Mapped, mapped_column
+from beanie import Document
+from pydantic import Field
+from pymongo import IndexModel
 
-from app.core.database import Base
+
+def _uuid() -> str:
+    return str(uuid.uuid4())
 
 
 class EmergencyType(str, enum.Enum):
@@ -23,38 +26,42 @@ class EmergencyStatus(str, enum.Enum):
     false_alarm = "false_alarm"
 
 
-class EmergencyEvent(Base):
-    __tablename__ = "emergency_events"
+class EmergencyEvent(Document):
+    id: str = Field(default_factory=_uuid)
+    owner_id: str
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    owner_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    type: EmergencyType = EmergencyType.sos
+    status: EmergencyStatus = EmergencyStatus.active
 
-    type: Mapped[EmergencyType] = mapped_column(SAEnum(EmergencyType), default=EmergencyType.sos)
-    status: Mapped[EmergencyStatus] = mapped_column(SAEnum(EmergencyStatus), default=EmergencyStatus.active)
-
-    location_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
-    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    location_label: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
 
     # list[{latitude, longitude, timestamp}]
-    location_history: Mapped[list] = mapped_column(JSON, default=list)
+    location_history: list = Field(default_factory=list)
 
-    battery_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    started_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
-    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    battery_level: int | None = None
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    resolved_at: datetime | None = None
 
-    contacts_notified: Mapped[int] = mapped_column(Integer, default=0)
-    evidence_recording: Mapped[bool] = mapped_column(Boolean, default=True)
-    evidence_upload_progress: Mapped[int] = mapped_column(Integer, default=0)
+    contacts_notified: int = 0
+    evidence_recording: bool = True
+    evidence_upload_progress: int = 0
 
     # Google Drive evidence folder — created immediately on SOS activation.
     # drive_link_sent tracks whether trusted contacts have already received
     # the folder link (it must only be sent once, per the spec).
-    drive_folder_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    drive_folder_link: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    drive_link_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    drive_folder_id: str | None = None
+    drive_folder_link: str | None = None
+    drive_link_sent: bool = False
 
     # stored as relative file paths under MEDIA_ROOT, e.g. "photos/<id>/front_....jpg"
-    evidence_photos: Mapped[list] = mapped_column(JSON, default=list)
-    evidence_videos: Mapped[list] = mapped_column(JSON, default=list)
-    evidence_clips: Mapped[list] = mapped_column(JSON, default=list)  # audio
+    evidence_photos: list = Field(default_factory=list)
+    evidence_videos: list = Field(default_factory=list)
+    evidence_clips: list = Field(default_factory=list)  # audio
+
+    class Settings:
+        name = "emergency_events"
+        indexes = [
+            IndexModel("owner_id"),
+        ]

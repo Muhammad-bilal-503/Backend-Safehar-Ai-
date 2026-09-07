@@ -8,10 +8,7 @@ ever exposes a live lat/lng + status, nothing more sensitive.
 """
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
-from sqlalchemy.orm import Session
-from fastapi import Depends
 
-from app.core.database import get_db
 from app.models.journey import Journey
 from app.models.emergency_event import EmergencyEvent
 
@@ -19,9 +16,9 @@ router = APIRouter(tags=["tracking"])
 
 
 @router.get("/api/public/track/{kind}/{item_id}")
-def public_track_data(kind: str, item_id: str, db: Session = Depends(get_db)):
+async def public_track_data(kind: str, item_id: str):
     if kind == "journey":
-        obj = db.get(Journey, item_id)
+        obj = await Journey.get(item_id)
         if not obj:
             raise HTTPException(404, "Not found.")
         return {
@@ -33,7 +30,7 @@ def public_track_data(kind: str, item_id: str, db: Session = Depends(get_db)):
             "eta_minutes": obj.eta_minutes,
         }
     if kind == "emergency":
-        obj = db.get(EmergencyEvent, item_id)
+        obj = await EmergencyEvent.get(item_id)
         if not obj:
             raise HTTPException(404, "Not found.")
         return {

@@ -2,10 +2,13 @@ import uuid
 from datetime import datetime, timezone
 import enum
 
-from sqlalchemy import String, Float, Integer, Boolean, DateTime, ForeignKey, JSON, Enum as SAEnum
-from sqlalchemy.orm import Mapped, mapped_column
+from beanie import Document
+from pydantic import Field
+from pymongo import IndexModel
 
-from app.core.database import Base
+
+def _uuid() -> str:
+    return str(uuid.uuid4())
 
 
 class JourneyStatus(str, enum.Enum):
@@ -15,43 +18,47 @@ class JourneyStatus(str, enum.Enum):
     deviated = "deviated"
 
 
-class Journey(Base):
-    __tablename__ = "journeys"
+class Journey(Document):
+    id: str = Field(default_factory=_uuid)
+    owner_id: str
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    owner_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    from_label: str
+    to_label: str
+    from_lat: float | None = None
+    from_lng: float | None = None
+    to_lat: float | None = None
+    to_lng: float | None = None
 
-    from_label: Mapped[str] = mapped_column(String(255))
-    to_label: Mapped[str] = mapped_column(String(255))
-    from_lat: Mapped[float | None] = mapped_column(Float, nullable=True)
-    from_lng: Mapped[float | None] = mapped_column(Float, nullable=True)
-    to_lat: Mapped[float | None] = mapped_column(Float, nullable=True)
-    to_lng: Mapped[float | None] = mapped_column(Float, nullable=True)
-
-    status: Mapped[JourneyStatus] = mapped_column(SAEnum(JourneyStatus), default=JourneyStatus.planned)
-    expected_arrival: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    status: JourneyStatus = JourneyStatus.planned
+    expected_arrival: datetime | None = None
 
     # Destination live-location sharing: the user can pick one or more trusted
     # contacts to share this journey with (see requirement "Destination Live
     # Location Sharing" — only these contacts receive updates for this journey,
     # separate from the emergency override which always notifies everyone).
-    trusted_contact_ids: Mapped[list] = mapped_column(JSON, default=list)
-    trusted_contact_names: Mapped[list] = mapped_column(JSON, default=list)
-    notify_on_deviation: Mapped[bool] = mapped_column(Boolean, default=True)
+    trusted_contact_ids: list[str] = Field(default_factory=list)
+    trusted_contact_names: list[str] = Field(default_factory=list)
+    notify_on_deviation: bool = True
 
-    current_lat: Mapped[float | None] = mapped_column(Float, nullable=True)
-    current_lng: Mapped[float | None] = mapped_column(Float, nullable=True)
-    route_safety_percent: Mapped[int] = mapped_column(Integer, default=100)
-    eta_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    off_route_distance_m: Mapped[float] = mapped_column(Float, default=0.0)
+    current_lat: float | None = None
+    current_lng: float | None = None
+    route_safety_percent: int = 100
+    eta_minutes: int | None = None
+    off_route_distance_m: float = 0.0
 
-    # route-deviation detection state (see app/services/geo.py)
-    baseline_lat: Mapped[float | None] = mapped_column(Float, nullable=True)
-    baseline_lng: Mapped[float | None] = mapped_column(Float, nullable=True)
-    axis_bearing: Mapped[float | None] = mapped_column(Float, nullable=True)
-    axis_locked: Mapped[bool] = mapped_column(Boolean, default=False)
-    deviation_streak: Mapped[int] = mapped_column(Integer, default=0)
+    # route-deviation detection state (see app/utils/geo.py)
+    baseline_lat: float | None = None
+    baseline_lng: float | None = None
+    axis_bearing: float | None = None
+    axis_locked: bool = False
+    deviation_streak: int = 0
 
-    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    class Settings:
+        name = "journeys"
+        indexes = [
+            IndexModel("owner_id"),
+        ]

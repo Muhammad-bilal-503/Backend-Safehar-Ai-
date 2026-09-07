@@ -1,9 +1,7 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
-from sqlalchemy.orm import Session
 
-from app.core.database import get_db
 from app.models.user import User
 from app.models.emergency_event import EmergencyEvent, EmergencyStatus, EmergencyType
 from app.models.trusted_contact import TrustedContact
@@ -26,33 +24,32 @@ async def _broadcast(event: EmergencyEvent, kind: str) -> None:
     })
 
 
-def _emergency_contacts(db: Session, owner_id: str) -> list[TrustedContact]:
-    return (
-        db.query(TrustedContact)
-        .filter(TrustedContact.owner_id == owner_id, TrustedContact.is_emergency_contact == True)  # noqa: E712
-        .all()
-    )
+async def _emergency_contacts(owner_id: str) -> list[TrustedContact]:
+    return await TrustedContact.find(
+        TrustedContact.owner_id == owner_id, TrustedContact.is_emergency_contact == True  # noqa: E712
+    ).to_list()
 
 
 @router.get("", response_model=list[EmergencyOut])
-def list_emergencies(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def list_emergencies(current_user: User = Depends(get_current_user)):
     """Guardians/response teams see all events; regular users see only their own."""
-    q = db.query(EmergencyEvent)
     if current_user.role != "admin":
-        q = q.filter(EmergencyEvent.owner_id == current_user.id)
-    return q.order_by(EmergencyEvent.started_at.desc()).all()
+        query = EmergencyEvent.find(EmergencyEvent.owner_id == current_user.id)
+    else:
+        query = EmergencyEvent.find_all()
+    return await query.sort(-EmergencyEvent.started_at).to_list()
 
 
 @router.get("/{emergency_id}", response_model=EmergencyOut)
-def get_emergency(emergency_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    event = db.get(EmergencyEvent, emergency_id)
+async def get_emergency(emergency_id: str, current_user: User = Depends(get_current_user)):
+    event = await EmergencyEvent.get(emergency_id)
     if not event or (current_user.role != "admin" and event.owner_id != current_user.id):
         raise HTTPException(404, "Emergency not found.")
     return event
 
 
 @router.post("/activate", response_model=EmergencyOut, status_code=201)
-async def activate_emergency(payload: EmergencyCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def activate_emergency(payload: EmergencyCreate, current_user: User = Depends(get_current_user)):
     event = EmergencyEvent(
         owner_id=current_user.id,
         type=EmergencyType(payload.type),
@@ -67,9 +64,7 @@ async def activate_emergency(payload: EmergencyCreate, current_user: User = Depe
             "latitude": payload.latitude, "longitude": payload.longitude,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }]
-    db.add(event)
-    db.commit()
-    db.refresh(event)
+    await event.insert()
 
     # Create the SOS evidence folder immediately, as required — before any
     # evidence has even been captured yet. Failures here are non-fatal; the
@@ -77,25 +72,23 @@ async def activate_emergency(payload: EmergencyCreate, current_user: User = Depe
     folder = drive_service.create_incident_folder(event.id, current_user.full_name)
     if folder:
         event.drive_folder_id, event.drive_folder_link = folder
-        db.commit()
-        db.refresh(event)
+        await event.save()
 
     # Emergency override: ALWAYS notify every emergency contact, regardless
     # of any destination-sharing selection on an active journey.
-    contacts = _emergency_contacts(db, current_user.id)
+    contacts = await _emergency_contacts(current_user.id)
     if payload.latitude is not None and payload.longitude is not None:
         result = await notify_emergency_location(current_user.full_name, contacts, payload.latitude, payload.longitude, event.id)
         event.contacts_notified = result["delivered"]
-        db.commit()
-        db.refresh(event)
+        await event.save()
 
     await _broadcast(event, "created")
     return event
 
 
 @router.post("/{emergency_id}/location", response_model=EmergencyOut)
-async def update_emergency_location(emergency_id: str, payload: EmergencyLocationUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    event = _get_owned(db, emergency_id, current_user.id)
+async def update_emergency_location(emergency_id: str, payload: EmergencyLocationUpdate, current_user: User = Depends(get_current_user)):
+    event = await _get_owned(emergency_id, current_user.id)
     if event.status != EmergencyStatus.active:
         raise HTTPException(400, "Emergency is not active.")
     event.latitude, event.longitude = payload.latitude, payload.longitude
@@ -107,20 +100,19 @@ async def update_emergency_location(emergency_id: str, payload: EmergencyLocatio
         "timestamp": datetime.now(timezone.utc).isoformat(),
     })
     event.location_history = history
-    db.commit()
-    db.refresh(event)
+    await event.save()
     await _broadcast(event, "updated")
     return event
 
 
 @router.post("/{emergency_id}/evidence/{kind}", response_model=EmergencyOut)
-async def upload_evidence(emergency_id: str, kind: str, file: UploadFile = File(...), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def upload_evidence(emergency_id: str, kind: str, file: UploadFile = File(...), current_user: User = Depends(get_current_user)):
     """kind: photo | video | audio. Streams the raw upload straight to disk —
     no Base64 — then forwards it into the incident's Drive folder. The Flutter
     app batches these calls into a once-a-minute cycle (see EvidenceCaptureService)."""
     if kind not in ("photo", "video", "audio"):
         raise HTTPException(400, "kind must be photo, video, or audio.")
-    event = _get_owned(db, emergency_id, current_user.id)
+    event = await _get_owned(emergency_id, current_user.id)
 
     relative_path = await save_evidence_file(kind, event.id, file)
     url = public_url(relative_path)
@@ -151,13 +143,12 @@ async def upload_evidence(emergency_id: str, kind: str, file: UploadFile = File(
         )
         drive_uploaded = drive_link is not None
 
-    db.commit()
-    db.refresh(event)
+    await event.save()
 
     # First successful Drive upload -> notify trusted contacts with the
     # folder link, exactly once for this incident.
     if drive_uploaded and not event.drive_link_sent and event.drive_folder_link:
-        contacts = _emergency_contacts(db, current_user.id)
+        contacts = await _emergency_contacts(current_user.id)
         any_sent = False
         for contact in contacts:
             if contact.email and contact.status != "pending":
@@ -166,16 +157,15 @@ async def upload_evidence(emergency_id: str, kind: str, file: UploadFile = File(
                 any_sent = any_sent or sent
         if any_sent:
             event.drive_link_sent = True
-            db.commit()
-            db.refresh(event)
+            await event.save()
 
     await _broadcast(event, "updated")
     return event
 
 
 @router.post("/{emergency_id}/status", response_model=EmergencyOut)
-async def set_status(emergency_id: str, payload: EmergencyStatusUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    event = db.get(EmergencyEvent, emergency_id)
+async def set_status(emergency_id: str, payload: EmergencyStatusUpdate, current_user: User = Depends(get_current_user)):
+    event = await EmergencyEvent.get(emergency_id)
     if not event or (current_user.role != "admin" and event.owner_id != current_user.id):
         raise HTTPException(404, "Emergency not found.")
     try:
@@ -184,14 +174,13 @@ async def set_status(emergency_id: str, payload: EmergencyStatusUpdate, current_
         raise HTTPException(400, "Invalid status.")
     if event.status != EmergencyStatus.active:
         event.resolved_at = datetime.now(timezone.utc)
-    db.commit()
-    db.refresh(event)
+    await event.save()
     await _broadcast(event, "updated")
     return event
 
 
-def _get_owned(db: Session, emergency_id: str, owner_id: str) -> EmergencyEvent:
-    event = db.get(EmergencyEvent, emergency_id)
+async def _get_owned(emergency_id: str, owner_id: str) -> EmergencyEvent:
+    event = await EmergencyEvent.get(emergency_id)
     if not event or event.owner_id != owner_id:
         raise HTTPException(404, "Emergency not found.")
     return event
